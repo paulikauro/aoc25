@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 
-import Data.List.Split (splitOn)
+import Data.List.Split (splitOn, chunksOf)
 import Data.List (singleton)
 
 
@@ -18,4 +18,14 @@ solve1 = sum . filter isInvalid . (>>= uncurry enumFromTo)
   isInvalid id = uncurry (==) $ splitAt (length d `div` 2) $ d
     where
     d = digits id
+
+isInvalid id = or [inv l | l <- [1..length d - 1]]
+  where
+  d = digits id
+  inv len = allEq $ chunksOf len d
+  allEq = all (uncurry (==)) . zipNext
+
+zipNext xs = zip xs (drop 1 xs)
+
+solve2 = sum . filter isInvalid . (>>= uncurry enumFromTo)
 
