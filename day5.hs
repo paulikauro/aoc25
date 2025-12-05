@@ -7,6 +7,8 @@ import Data.Array qualified as A
 import Data.Maybe (catMaybes)
 import Data.Foldable (toList)
 import Control.Monad
+import Data.List (sort)
+import Data.Ord (clamp)
 
 parse :: String -> ([(Int, Int)], [Int])
 parse = (map range *** map read) . tup . map lines . splitOn "\n\n"
@@ -19,6 +21,13 @@ solve1 (ranges, ids) = length $ filter isFresh ids
   isFresh id = any (inRange id) ranges
 
 inRange id (a, b) = a <= id && id <= b
+
+solve2' (ranges, _) = fst $ foldl' step (0, 0) $ sort ranges
+  where
+  step (acc, b') (a, b) = (acc + len - clamp (0, len) (b' - a + 1), max b' b)
+    where
+    len = b - a + 1
+
 overlaps (a1, b1) (a2, b2) = b1 >= a2 && b2 >= a1
 merge (a1, b1) (a2, b2) = (min a1 a2, max b1 b2)
 arrIndices = A.range . A.bounds
