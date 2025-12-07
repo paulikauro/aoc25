@@ -1,6 +1,7 @@
 import Data.Bits (shiftL, shiftR, (.|.), (.&.), popCount, complement)
 import Data.List (uncons)
 import Data.Maybe (fromJust)
+import Control.Arrow ((***))
 
 parse1 :: String -> (Integer, [Integer])
 parse1 = (\(x:xs) -> (start x, rest xs)) . lines
@@ -20,13 +21,21 @@ solve1 (start, lines) = fst $ foldl' step (0, start) lines
     new = shiftL hits 1 .|. shiftR hits 1
     result = (curr .|. new) .&. complement hits
 
-parse2 :: String -> (String, [String])
-parse2 = fromJust . uncons . lines
+parse2 :: String -> ([Int], [[Int]])
+parse2 = (bittify 'S' *** map (bittify '^')) . fromJust . uncons . lines
+  where
+  bittify c = map (fromEnum . (== c))
 
-solve2 (start, lines) = sum $ foldl' step (map (fromEnum . (== 'S')) start) lines
+
+solve2 (start, lines) = sum $ foldl' step start lines
   where
   step curr line = result
     where
-    hits = zipWith (\a x -> if x == '^' then a else 0) curr line
-    new = zipWith (+) (tail hits ++ [0]) ([0] ++ hits)
-    result = zipWith (\x h -> if h > 0 then 0 else x) (zipWith (+) curr new) hits
+    hits = curr .&. line
+    new = shiftL hits .|. shiftR hits
+    result = (curr .|. new) .&. complement hits
+  (.&.) = zipWith (*)
+  (.|.) = zipWith (+)
+  shiftL = drop 1 . (++ [0])
+  shiftR = ([0] ++)
+  complement = map (fromEnum . (== 0))
