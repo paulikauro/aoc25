@@ -1,11 +1,15 @@
-{-# LANGUAGE BlockArguments #-}
-import Data.Bits (shiftL, (.|.), xor, bit)
+{-# LANGUAGE BlockArguments, LambdaCase #-}
+import Data.Bits (shiftL, (.|.), xor, bit, popCount, testBit)
 import Data.List.Split (splitOn)
-import Data.List (uncons, unsnoc, intercalate)
+import Data.List (uncons, unsnoc, intercalate, sortOn)
 import Data.Foldable (toList)
 import Data.Array qualified as A
 import Data.Set qualified as Set
+import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes)
 import Debug.Trace
+import Control.Arrow (second)
+import Control.Monad (guard)
 
 type Machine = (Int, [[Int]], [Int])
 
@@ -39,20 +43,39 @@ solve1machine ((x, n):xs) v m@(target, btns)
 
 mkArray xs = A.listArray (0, length xs - 1) xs
 
+div' n = \case
+  0 -> []
+  1 -> [[n]]
+  k -> [0..n] >>= \i -> map (i:) $ div' (n - i) (k - 1)
+
+main = interact $ show . solve2 . parse
 solve2 = sum . map solve2machine'
 solve2machine' :: Machine -> Int
-solve2machine' (_, btns, joltage) = traceShowId $ solve2machine [(allZeros, 0)] Set.empty (btns, mkArray joltage)
+solve2machine' ((_, btns, joltage) :: Machine) = traceShowId $ solve2machine (length btns) jolts
   where
-  allZeros = mkArray (replicate (length joltage) 0)
+  jolts = sortOn (popCount . snd) $ map (second mask) $ zip joltage [0..]
+  mask j = foldl' (\a b -> shiftL a 1 .|. fromEnum (j `elem` b)) (0 :: Int) $ reverse btns
 
-solve2machine ((x, n):xs) v m@(btns, target)
-  | x == target = n
-  | x `Set.member` v = solve2machine xs v m
-  | otherwise = solve2machine frontier' v' m
+solve2machine nBtns jolts = minimum $ go (allZeros nBtns) jolts
   where
-  v' = Set.insert x v
-  neighbors = map (, n + 1) $ filter (`Set.notMember` v') $ map inc btns
-  isOK a = a `Set.notMember` v' && and (zipWith (<=) (toList a) (toList target))
-  inc btn = x A.// [(i, x A.! i + 1) | i <- btn]
-  frontier' = xs ++ neighbors
+  go :: A.Array Int (Maybe Int) -> [(Int, Int)] -> [Int]
+  go m [] = [sum $ catMaybes $ toList m]
+  go m ((j, bs):js) = do
+    let fixed = calcFixed bs m
+    guard $ fixed <= j
+    guard $ areOK js m
+    let available = j - fixed
+    let slots' = slots bs m
+    let k = length slots'
+    --trace (replicate (length jolts - length js) '\t' ++ show ("j:js m", j, js, m, "fix av k", fixed, available, k)) [()]
+    guard $ k > 0 || fixed == j
+    if k == 0
+      then go m js
+      else do
+        d <- div' available k
+        go (m A.// zip slots' (map Just d)) js
+  calcFixed bs m = sum [c | (i, Just c) <- A.assocs m, testBit bs i]
+  slots bs m = [i | (i, Nothing) <- A.assocs m, testBit bs i]
+  areOK js m = all (\(j, bs) -> calcFixed bs m <= j) js
+  allZeros n = mkArray $ replicate n Nothing
 
