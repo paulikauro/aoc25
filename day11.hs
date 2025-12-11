@@ -1,24 +1,28 @@
 import Data.List.Split (splitOn)
 import Control.Arrow (second)
-import Data.Map.Strict qualified as Map
+import Data.Foldable (toList)
+import Data.Map qualified as Map
 import Data.Set qualified as Set
-import Debug.Trace
 
 parse = map (second words . tup . splitOn ": ") . lines
   where
   tup [x, y] = (x, y)
 
-solve1 = bfs ["you"] Set.empty (Map.singleton "you" 1) . Map.fromList
+solve1 ms = paths ms "you" "out" []
+
+paths ms' a b forbiddens = p Map.! b
   where
-  bfs [] v c m = c Map.! "out"
-  bfs (node:ns) v c m
-    -- | traceShow (node, ns, v, c) False = undefined
-    | node `Set.member` v = bfs ns v c m
-    | otherwise = bfs (ns ++ frontier) v' c' m
-    where
-    count = Map.findWithDefault 0 node c
-    v' = Set.insert node v
-    neighbors = Map.findWithDefault [] node m
-    frontier = filter (`Set.notMember` v) neighbors
-    c' = foldl' (\a b -> upc a b count) c neighbors
-    upc c node count = Map.insertWith (+) node count c
+  isAllowed x = x `notElem` forbiddens
+  ms = map (\(a, bs) -> (a, filter isAllowed bs)) $ filter (\(a, bs) -> isAllowed a) ms'
+  nodes = Set.fromList $ map fst ms ++ concatMap snd ms
+  rev = Map.fromListWith (++) $ concatMap (\(a, bs) -> map (\b -> (b, [a])) bs) ms
+  p = Map.fromList [(x, f x) | x <- toList nodes]
+  f x
+    | x == a = 1
+    | otherwise = sum [p Map.! pred | pred <- Map.findWithDefault [] x rev]
+
+solve2 ms = (fft_dac + dac_fft) :: Integer
+  where
+  p = paths ms
+  fft_dac = p "svr" "fft" ["dac"] * p "fft" "dac" [] * p "dac" "out" ["fft"]
+  dac_fft = p "svr" "dac" ["fft"] * p "dac" "fft" [] * p "fft" "out" ["dac"]
