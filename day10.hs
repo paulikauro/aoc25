@@ -1,13 +1,13 @@
 {-# LANGUAGE BlockArguments, LambdaCase #-}
 import Data.Bits (shiftL, (.|.), (.&.), xor, bit, popCount, testBit)
 import Data.List.Split (splitOn)
-import Data.List (uncons, unsnoc, intercalate, sortOn, find, sortBy, foldl1')
+import Data.List (uncons, unsnoc, intercalate, sortOn, find, sortBy, foldl1', transpose, findIndex)
 import Data.Foldable (toList, traverse_)
 import Data.Function (on)
 import Data.Array qualified as A
 import Data.Set qualified as Set
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromJust)
 import Debug.Trace
 import Control.Arrow (second)
 import Control.Monad (guard)
@@ -44,82 +44,28 @@ solve1machine ((x, n):xs) v m@(target, btns)
 
 mkArray xs = A.listArray (0, length xs - 1) xs
 
-div' n = \case
-  0 -> []
-  1 -> [[n]]
-  k -> [0..n] >>= \i -> map (i:) $ div' (n - i) (k - 1)
-
-div'' n = \case
-  [] -> []
-  [k] -> if k >= n then [[n]] else []
-  k:ks -> [0..k] >>= \i -> map (i:) $ div'' (n - i) ks
-
 main = interact $ show . solve2 . parse
 solve2 = sum . map solve2machine'
 solve2machine' :: Machine -> Int
 solve2machine' = traceShowId . solve2machine . toAMatrix . gj . toMatrix
 
-type Btns = A.Array Int (Maybe Int)
-
-solve2machine :: [(A.Array Int Int, Int)] -> Int
-solve2machine jolts = minimum $ go (allNothing nBtns) (nBtns - 1)
+solve2machine :: ([Int], ([[Int]], [[Int]])) -> Int
+solve2machine (jolts, (unknowns, diag)) = minimum $ go_unknowns unknowns []
   where
-  nBtns = A.rangeSize . A.bounds . fst $ head jolts
-  go :: Btns -> Int -> [Int]
-  go btns 0 = [sum . catMaybes $ toList btns]
-  go btns i = do
-    let maxBtn = minimum $ catMaybes (Just (-1) : btnMaxes i btns)
-    --traceShow (i, maxBtn, btns) [()]
-    thisBtn <- [0..maxBtn]
-    go (btns A.// [(i, Just thisBtn)]) (i - 1)
-  btnMaxes :: Int -> Btns -> [Maybe Int]
-  btnMaxes i btns = map (btnMax i btns) jolts
-  -- btn i, counter ctrRow
-  btnMax :: Int -> Btns -> (A.Array Int Int, Int) -> Maybe Int
-  btnMax i btns ctrRow@(arr, _)
-    | av <= 0 = Just 0
-    | coeff == 0 = Nothing
-    | otherwise = Just many
+  allCols = unknowns ++ diag
+  h = length jolts
+  go_unknowns [] btns = go_diag diag btns
+  go_unknowns (x:xs) btns = do
+    btn <- [0..256]
+    go_unknowns xs (btns ++ [btn])
+  go_diag :: [[Int]] -> [Int] -> [Int]
+  go_diag [] btns = [sum btns]
+  go_diag (x:xs) btns = if r /= 0 || q < 0 then [] else go_diag xs (btns ++ [q])
     where
-    coeff = arr A.! i
-    av = calcAvailable ctrRow btns
-    many = av `div` coeff
-  calcAvailable (arr, jolt) btns = jolt - calcFixed arr btns
-  calcFixed arr btns = sum $ zipWith calcFixed' (A.elems btns) (A.elems arr)
-  calcFixed' Nothing _ = 0
-  calcFixed' (Just b) x = b * x
-  allNothing n = mkArray $ replicate n Nothing
-
-{-
-solve2machine''' jolts = minimum $ go (allZeros nBtns) jolts
-  where
-  nBtns = A.rangeSize . A.bounds . fst $ head jolts
-  go :: A.Array Int (Maybe Int) -> [(Int, Int)] -> [Int]
-  go m [] = [sum $ catMaybes $ toList m]
-  go m ((j, bs):js) = do
-    let fixed = calcFixed bs m
-    guard $ fixed <= j
-    guard $ areOK js m
-    let available = j - fixed
-    let slots' = slots bs m
-    let k = length slots'
-    --trace (replicate (length jolts - length js) '\t' ++ show ("j:js m", j, js, m, "fix av k", fixed, available, k)) [()]
-    guard $ k > 0 || fixed == j
-    if k == 0
-      then go m js
-      else do
-        let avs = availables available js m slots'
-        d <- if avs == [] then div' available k else div'' available avs
-        go (m A.// zip slots' (map Just d)) js
-  calcFixed bs m = sum [c | (i, Just c) <- A.assocs m, testBit bs i]
-  slots bs m = [i | (i, Nothing) <- A.assocs m, testBit bs i]
-  areOK js m = all (\(j, bs) -> calcFixed bs m <= j) js
-  availables a js m = map (\i -> minimum $ a : (map av' $ filter (hasI i) js))
-    where
-    av' (j, bs) = j - calcFixed bs m
-    hasI i (_, bs) = testBit bs i
-  allZeros n = mkArray $ replicate n Nothing
--}
+    Just (pi, p) = find ((/= 0) . snd) $ zip [0..] x
+    (q, r) = available btns pi `divMod` p
+  available btns pi = (jolts !! pi) - fixed btns pi
+  fixed btns pi = sum $ zipWith (\b c -> b * (c !! pi)) btns allCols
 
 gj :: [[Int]] -> [[Int]]
 gj xs = descSort $ normRes $ foldl' step xs [0..length xs - 1]
@@ -147,13 +93,20 @@ gj xs = descSort $ normRes $ foldl' step xs [0..length xs - 1]
 
 toMatrix (_, btns, jolts) = zipWith (\j ji -> map (fromEnum . elem ji) (reverse btns) ++ [j]) jolts [0..]
 
-toAMatrix = map mkRow
+toAMatrix :: [[Int]] -> ([Int], ([[Int]], [[Int]]))
+toAMatrix = second (splitDiag . sortCols) . uncons' . transpose . map reverse
   where
-  mkRow xs = (mkArray (init xs), last xs)
+  uncons' = fromJust . uncons
+  splitDiag xs = splitAt extraUnknowns xs
+    where
+    unknowns = length xs
+    eqs = length (head xs)
+    extraUnknowns = unknowns - eqs
+  sortCols = sortOn f
+  f col = if length (filter (/= 0) col) /= 1 then -1 else fromJust $ findIndex (/= 0) col
 
 printArr :: [[Int]] -> IO ()
 printArr xs = traverse_ print xs >> putStrLn ""
 
-printAArr :: [(A.Array Int Int, Int)] -> IO ()
-printAArr = printArr . map (\(xs, x) -> A.elems xs ++ [x])
+printAArr (j, (u, d)) = printArr . transpose $ [j] ++ u ++ d
 
