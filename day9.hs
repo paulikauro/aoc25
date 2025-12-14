@@ -1,6 +1,7 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, ViewPatterns #-}
 import Data.List.Split (splitOn)
 import Data.List (partition, scanl', find, sort)
+import Data.Foldable (foldMap)
 import Data.Array qualified as A
 import Data.Map.Strict qualified as Map
 import Data.Bits (bit, (.|.), (.&.), xor, complement, testBit)
@@ -84,28 +85,19 @@ removeOverlaps (vs, hs, ccw) seg@((x1, y1), (x2, y2))
     Just ls -> map (reY y1) $ remove' ls (x1, x2)
   where
   reX x (a, b) = ((x, a), (x, b))
-  reY y (a, b) = ((y, a), (y, b))
+  reY y (a, b) = ((a, y), (b, y))
   remove' :: [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
   remove' ls p = go (sort (map sortPair ls)) (sortPair p)
   go [] p = [p]
   go ((a, b):xs) (c, d)
     | a <= c && d <= b = []
-    | a <= c = go xs (b, d)
-    | d <= b = go xs (c, a)
-    | otherwise = go xs (c, a) ++ go xs (b, d)
+    | a <= c = go xs (b + 1, d)
+    | d <= b = go xs (c, a - 1)
+    | otherwise = go xs (c, a - 1) ++ go xs (b + 1, d)
 
-data Overlap = Completely | Partially | Nah
-doesOverlap :: (EMap, EMap, Bool) -> ((Int, Int), (Int, Int)) -> Overlap
-doesOverlap (vs, hs, ccw) seg@((x1, y1), (x2, y2))
-  | x1 == x2 = case Map.lookup x1 vs of
-    Nothing -> [seg]
-    Just ls -> undefined
-  | otherwise = case Map.lookup y1 hs of
-    Nothing -> [seg]
-    Just ls -> undefined
-
+-- this doesn't work for segments whose length is 3 or smaller,
+-- but they don't occurr in the input (at least mine)
 isSegInside m (a, b) = isPointInside m a && isPointInside m b && all (isSegNotPierced m) (removeOverlaps m (shrink (a, b)))
---isSegInside m (a, b) = isPointInside m a && isPointInside m b && isSegNotPierced m (shrink (a, b))
 
 shrink ((x1, y1), (x2, y2))
   | x1 == x2 = ((x1, min y1 y2 + 1), (x1, (max y1 y2 - 1)))
@@ -120,6 +112,7 @@ isRectInside m ((x1, y1), (x2, y2)) = all (isSegInside m) segs
     , ((x1, y2), (x2, y2))
     ]
 
+-- check point by point, too slow. exists for verification purposes
 isSegInside' m ((x1, y1), (x2, y2))
   | x1 == x2 = all (isPointInside m) [(x1, y) | y <- [min y1 y2..max y1 y2]]
   | otherwise = all (isPointInside m) [(x, y1) | x <- [min x1 x2..max x1 x2]]
