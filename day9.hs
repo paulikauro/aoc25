@@ -1,9 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
 import Data.List.Split (splitOn)
-import Data.List (partition, scanl')
+import Data.List (partition, scanl', find, sort)
 import Data.Array qualified as A
 import Data.Map.Strict qualified as Map
 import Data.Bits (bit, (.|.), (.&.), xor, complement, testBit)
+import Data.Maybe (listToMaybe, catMaybes)
+import Data.Tuple (swap)
 import Control.Arrow (second, (&&&), (***))
 import Debug.Trace
 
@@ -21,66 +23,109 @@ solve1 = maximum . map area . pairs
 
 area ((x1, y1), (x2, y2)) = (abs (x2 - x1) + 1) * (abs (y2 - y1) + 1)
 
-edges xs = zip xs (tail xs)
-
--- breaks if lo=0
-mkLine (lo, hi) = to hi - to (lo - 1)
+zipNext xs = zip xs (tail xs)
+mkEdges points = (vs, hs, isCCW)
   where
-  to x = bit (x + 1) - 1
+  edges = zipNext (points ++ [head points])
+  (vert, horiz) = partition isVert edges
+  vs = Map.fromListWith (++) $ map (\((x, y1), (_, y2)) -> (x, [(y1, y2)])) vert
+  hs = Map.fromListWith (++) $ map (\((x1, y), (x2, _)) -> (y, [(x1, x2)])) horiz
+  (minX, (minY1, minY2)) = second head $ Map.findMin vs
+  -- counterclockwise?
+  isCCW = minY2 > minY1
 
-mkEnds (lo, hi) = bit lo .|. bit hi
+-- edge is flipped <=> outside of area points to +x or +y direction from edge
+isFlipped ccw ((x1, y1), (x2, y2)) = ccw `xor` if x1 == x2 then y2 > y1 else x2 < x1
 
--- (i, lo, hi)
-table :: [(Int, (Int, Int))] -> A.Array Int Integer
-table es = A.listArray (0, 100000) $ map fst $ scanl' step (0, 0) [1..100000]
+isVert :: ((Int, Int), (Int, Int)) -> Bool
+isVert = uncurry (==) . (fst . fst &&& fst . snd)
+
+type EMap = Map.Map Int [(Int, Int)]
+
+both f = f *** f
+
+(<**>) :: Applicative f => (a -> f b) -> (c -> f d) -> (a, c) -> f (b, d)
+(<**>) g h (a, c) = (,) <$> g a <*> h c
+
+isPointInside :: (EMap, EMap, Bool) -> (Int, Int) -> Bool
+isPointInside (vs, hs, ccw) (x, y)
+  | isOnEdge vs x y || isOnEdge hs y x = True
+  | otherwise = Just True == ((&&) <$> isOK x y vs id <*> isOK y x hs swap)
   where
-  edgeMap = Map.fromListWith (.|.) $ map (second mkLine) es
-  vertexMap = Map.fromListWith (.|.) $ map (second mkEnds) es
-  step (last, lateflip) i = (new, lateflip')
-    where
-    e = Map.findWithDefault 0 i edgeMap
-    nowflip = e `nimp` last
-    lateflip' = e .&. last
-    new = (last `xor` lateflip `xor` nowflip) .|. Map.findWithDefault 0 i vertexMap
+  isOnEdge m a b = (any (isBetween b) <$> m Map.!? a) == Just True
+  isOK a b m f = do
+    (l, r) <- (Map.lookupMax <**> Map.lookupMin) $ both (restrict b) $ Map.spanAntitone (< a) m
+    pure $ not (isFlipped ccw (expand f l)) && isFlipped ccw (expand f r)
 
---nimp :: Bits a => a -> a -> a
-nimp a b = a .&. complement b
+isBetween :: Int -> (Int, Int) -> Bool
+isBetween x (a, b) = a <= x && x <= b || a >= x && x >= b
 
-mkTables :: [(Int, Int)] -> (A.Array Int Integer, A.Array Int Integer)
-mkTables = (tableV *** tableH) . partition (uncurry (==) . (fst . fst &&& fst . snd)) . edges
+restrict :: Int -> EMap -> Map.Map Int (Int, Int)
+restrict b = Map.mapMaybe $ find (isBetween b)
+
+expand f (a, (b1, b2)) = (f (a, b1), f (a, b2))
+
+isSegNotPierced :: (EMap, EMap, Bool) -> ((Int, Int), (Int, Int)) -> Bool
+isSegNotPierced (vs, hs, ccw) seg@((x1, y1), (x2, y2))
+  | x1 == x2 = test hs y1 y2 x1
+  | otherwise = test vs x1 x2 y1
   where
-  tableV = table . map (\((x, a), (_, b)) -> (x, sort' a b))
-  tableH = table . map (\((a, y), (b, _)) -> (y, sort' a b))
+  test m a1 a2 b = Just True == ((\(k, _) -> k >= max a1 a2) <$> (Map.lookupMin $ restrict b $ Map.dropWhileAntitone (\t -> t <= min a1 a2) m))
 
-sort' a b
-  | a <= b = (a, b)
-  | otherwise = (b, a)
+sortPair (a, b) = (min a b, max a b)
 
-printTable tbl w h i
-  | h == i = pure ()
-  | otherwise = do
-    printRow (tbl A.! i) w
-    putStrLn ""
-    printTable tbl w h (i + 1)
+removeOverlaps :: (EMap, EMap, Bool) -> ((Int, Int), (Int, Int)) -> [((Int, Int), (Int, Int))]
+removeOverlaps (vs, hs, ccw) seg@((x1, y1), (x2, y2))
+  | x1 == x2 = case Map.lookup x1 vs of
+    Nothing -> [seg]
+    Just ls -> map (reX x1) $ remove' ls (y1, y2)
+  | otherwise = case Map.lookup y1 hs of
+    Nothing -> [seg]
+    Just ls -> map (reY y1) $ remove' ls (x1, x2)
   where
-  printRow r i
-    | i == 0 = pure ()
-    | otherwise = do
-      putStr $ case testBit r i of { True -> "X"; False -> "." }
-      printRow r (i - 1)
+  reX x (a, b) = ((x, a), (x, b))
+  reY y (a, b) = ((y, a), (y, b))
+  remove' :: [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
+  remove' ls p = go (sort (map sortPair ls)) (sortPair p)
+  go [] p = [p]
+  go ((a, b):xs) (c, d)
+    | a <= c && d <= b = []
+    | a <= c = go xs (b, d)
+    | d <= b = go xs (c, a)
+    | otherwise = go xs (c, a) ++ go xs (b, d)
 
-solve2 ps = maximum $ map area $ filter isContained $ pairs ps
+data Overlap = Completely | Partially | Nah
+doesOverlap :: (EMap, EMap, Bool) -> ((Int, Int), (Int, Int)) -> Overlap
+doesOverlap (vs, hs, ccw) seg@((x1, y1), (x2, y2))
+  | x1 == x2 = case Map.lookup x1 vs of
+    Nothing -> [seg]
+    Just ls -> undefined
+  | otherwise = case Map.lookup y1 hs of
+    Nothing -> [seg]
+    Just ls -> undefined
+
+isSegInside m (a, b) = isPointInside m a && isPointInside m b && all (isSegNotPierced m) (removeOverlaps m (shrink (a, b)))
+--isSegInside m (a, b) = isPointInside m a && isPointInside m b && isSegNotPierced m (shrink (a, b))
+
+shrink ((x1, y1), (x2, y2))
+  | x1 == x2 = ((x1, min y1 y2 + 1), (x1, (max y1 y2 - 1)))
+  | otherwise = ((min x1 x2 + 1, y1), (max x1 x2 - 1, y1))
+
+isRectInside m ((x1, y1), (x2, y2)) = all (isSegInside m) segs
   where
-  (v, h) = mkTables ps
-  isContained = all isSegmentContained . segments
-  isSegmentContained ((x1, y1), (x2, y2))
-    | x1 == x2 = isSegmentContained' v x1 $ sort' y1 y2
-    | otherwise = isSegmentContained' h y1 $ sort' x1 x2
-  isSegmentContained' tbl i p = let x = mkLine p in x == (tbl A.! i) .&. x
-  segments ((x1, y1), (x2, y2)) =
+  segs =
     [ ((x1, y1), (x1, y2))
     , ((x2, y1), (x2, y2))
     , ((x1, y1), (x2, y1))
     , ((x1, y2), (x2, y2))
     ]
 
+isSegInside' m ((x1, y1), (x2, y2))
+  | x1 == x2 = all (isPointInside m) [(x1, y) | y <- [min y1 y2..max y1 y2]]
+  | otherwise = all (isPointInside m) [(x, y1) | x <- [min x1 x2..max x1 x2]]
+
+solve2 ps = maximum . map area . filter (isRectInside m) $ pairs ps
+  where
+  m = mkEdges ps
+
+main = interact $ show . solve2 . parse
